@@ -41,7 +41,7 @@ Guidelines:
  5. Conclusion: Ask what insights or understandings emerge about themselves, their identity, or their approach to technical depth.
  6. Action Orientation: Ask what they would like to try, explore, or keep noticing next — only if relevant to them.
 
- We are now at step {step} 
+ We are now at step {step.value} 
  """
 
     else:
