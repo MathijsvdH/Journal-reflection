@@ -1,4 +1,4 @@
-def build_prompt(journal_text: str, mode: str, topic: str | None, step: int | None, history: list[dict] | None = None, segment_text: str | None = None, segment_indexes: tuple[int, int] | None = None) -> str:
+def build_prompt(journal_text: str, mode: str, topic: str | None, step: int | None, history: list[dict] | None = None, segment_text: str | None = None, segment_indexes: list[int] | None = None) -> str:
     base = f"""You are a thoughtful journaling coach. A user has shared their journal entry with you.
 
 Journal Entry:

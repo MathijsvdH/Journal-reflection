@@ -5,7 +5,6 @@ from pydantic import BaseModel
 from enum import Enum
 import httpx
 import json
-import re
 
 import question_prompt
 import segment_prompt
@@ -49,7 +48,7 @@ class GenerateRequest(BaseModel):
     topic: str | None = None  # optional focus topic for deep dive
     history: list[dict] | None = None  # Q&A history with timestamps
     segment: str | None = None  # focused segment text
-    segment_indexes: tuple[int, int] | None = None  # (startIndex, endIndex) of the segment
+    segment_indexes: list[int] | None = None  # [startIndex, endIndex] of the segment
     
 @app.post("/upload")
 async def upload_journal(file: UploadFile = File(...)):
@@ -59,8 +58,12 @@ async def upload_journal(file: UploadFile = File(...)):
         f.write(text)
     return {"word_count": len(text.split()), "filename": file.filename}
 
+class SegmentResponse(BaseModel):
+    segments: list[Segment]
+    journal_text: str
+
 @app.post("/segment")
-async def segment_journal() -> list[Segment]:
+async def segment_journal() -> SegmentResponse:
     try:
         with open(JOURNAL_PATH) as f:
             journal_text = f.read()
@@ -101,15 +104,17 @@ async def segment_journal() -> list[Segment]:
                     segments.append(Segment(
                         name=seg.get("name", ""),
                         summary=seg.get("summary", ""),
-                        startIndex=seg.get("start", 0),
-                        endIndex=seg.get("end", 0)
+                        startIndex=seg.get("startIndex", 0),
+                        endIndex=seg.get("endIndex", 0)
                     ))
 
-                return segments
+                return SegmentResponse(segments=segments, journal_text=journal_text)
             except (json.JSONDecodeError, ValueError, KeyError) as e:
                 print(f"Parse error: {str(e)}")
                 print(f"Response text: {response_text}")
                 raise HTTPException(status_code=500, detail=f"Failed to parse segments: {str(e)}")
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Segment error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Segmentation failed: {str(e)}")
