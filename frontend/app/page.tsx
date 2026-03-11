@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, ChangeEvent, JSX } from "react";
+import { useState, useRef, useCallback, ChangeEvent, JSX, } from "react";
 
 const API = "http://localhost:8000";
 
@@ -23,6 +23,15 @@ interface Segment {
   summary: string;
   startIndex: number;
   endIndex: number;
+}
+
+type SegmentMode = "manual" | "llm";
+
+interface PendingSegment {
+  startIndex: number;
+  endIndex: number;
+  x: number;
+  y: number;
 }
 
 interface GenerateOptions {
@@ -56,7 +65,11 @@ export default function Home(): JSX.Element {
   const [selectedSegment, setSelectedSegment] = useState<number | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>("");
+  const [segmentMode, setSegmentMode] = useState<SegmentMode>("manual");
+  const [pendingSegment, setPendingSegment] = useState<PendingSegment | null>(null);
+  const [segmentName, setSegmentName] = useState<string>("");
   const fileRef = useRef<HTMLInputElement>(null);
+  const journalRef = useRef<HTMLDivElement>(null);
 
   async function handleUpload(e: ChangeEvent<HTMLInputElement>): Promise<void> {
     const file = e.target.files?.[0];
@@ -201,11 +214,108 @@ export default function Home(): JSX.Element {
     setError("");
   }
 
+  function getCharOffset(container: HTMLElement, node: Node, offset: number): number {
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+    let charCount = 0;
+    let current = walker.nextNode();
+    while (current) {
+      if (current === node) return charCount + offset;
+      charCount += (current.textContent?.length ?? 0);
+      current = walker.nextNode();
+    }
+    return charCount + offset;
+  }
+
+  function getOverlapping(startIdx: number, endIdx: number): number[] {
+    const indices: number[] = [];
+    segments.forEach((seg, i) => {
+      if (startIdx < seg.endIndex && endIdx > seg.startIndex) indices.push(i);
+    });
+    return indices;
+  }
+
+  const handleMouseUp = useCallback(() => {
+    if (segmentMode !== "manual" || !journalRef.current) return;
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) return;
+    const range = sel.getRangeAt(0);
+    if (!journalRef.current.contains(range.startContainer) || !journalRef.current.contains(range.endContainer)) return;
+
+    const startIdx = getCharOffset(journalRef.current, range.startContainer, range.startOffset);
+    const endIdx = getCharOffset(journalRef.current, range.endContainer, range.endOffset);
+    if (startIdx >= endIdx) return;
+
+    // Remove any overlapping segments — the new selection replaces them
+    const overlapping = getOverlapping(startIdx, endIdx);
+    if (overlapping.length > 0) {
+      setSegments((prev) => prev.filter((_, i) => !overlapping.includes(i)));
+    }
+
+    const rect = range.getBoundingClientRect();
+    const containerRect = journalRef.current.getBoundingClientRect();
+    setPendingSegment({
+      startIndex: startIdx,
+      endIndex: endIdx,
+      x: rect.left - containerRect.left + rect.width / 2,
+      y: rect.bottom - containerRect.top + 8,
+    });
+    setSegmentName("");
+    setError("");
+    sel.removeAllRanges();
+  }, [segmentMode, segments, journalText]);
+
+  function confirmSegment(): void {
+    if (!pendingSegment || !segmentName.trim()) return;
+    const selectedText = journalText.slice(pendingSegment.startIndex, pendingSegment.endIndex);
+    setSegments((prev) => [...prev, {
+      name: segmentName.trim(),
+      summary: selectedText.slice(0, 100),
+      startIndex: pendingSegment.startIndex,
+      endIndex: pendingSegment.endIndex,
+    }]);
+    setPendingSegment(null);
+    setSegmentName("");
+    window.getSelection()?.removeAllRanges();
+  }
+
+  function cancelSegment(): void {
+    setPendingSegment(null);
+    setSegmentName("");
+    window.getSelection()?.removeAllRanges();
+  }
+
+  function removeSegment(idx: number): void {
+    setSegments((prev) => prev.filter((_, i) => i !== idx));
+  }
+
   async function startDeepDive(): Promise<void> {
     setLoading(true);
     setError("");
+    setMode("deep_dive");
+    setSegmentMode("manual");
+    setSegments([]);
+    setPendingSegment(null);
     try {
-      // Fetch segments
+      const res = await fetch(`${API}/journal-text`);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || "Failed to load journal");
+      }
+      const data = await res.json();
+      setJournalText(data.journal_text);
+      setStage("segment-select");
+    } catch (err) {
+      const error = err instanceof Error ? err.message : "Unknown error";
+      setError(error);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadLlmSegments(): Promise<void> {
+    setLoading(true);
+    setError("");
+    try {
       const segRes = await fetch(`${API}/segment`, { method: "POST" });
       if (!segRes.ok) {
         const data = await segRes.json().catch(() => ({}));
@@ -214,24 +324,17 @@ export default function Home(): JSX.Element {
       const data = await segRes.json();
       setSegments(data.segments);
       setJournalText(data.journal_text);
-
-      if (data.segments.length > 0) {
-        setStage("segment-select");
-        setLoading(false);
-      } else {
-        setStep(1);
-        setLoading(false);
-        await generate({ step: 1, mode: "deep_dive" });
-      }
     } catch (err) {
       const error = err instanceof Error ? err.message : "Unknown error";
       setError(error);
+    } finally {
       setLoading(false);
     }
   }
 
   function selectSegmentAndDive(segmentIndex: number): void {
     setSelectedSegment(segmentIndex);
+    setMode("deep_dive");
     const segment = segments[segmentIndex];
     const segmentText = segment ? segment.name + "\n" + segment.summary : "";
     setStep(1);
@@ -284,33 +387,87 @@ export default function Home(): JSX.Element {
             {/* Select Segment for Deep Dive */}
             {stage === "segment-select" && (
               <div className="flex flex-col gap-5">
-                <p className="text-xs tracking-wide text-[#999]">click a highlighted segment to explore it</p>
+                {/* Mode toggle */}
+                <div className="flex gap-3">
+                  <button
+                    className={`px-4 py-2 text-xs tracking-wider rounded-sm border cursor-pointer transition-colors ${segmentMode === "manual"
+                      ? "border-[#c8b89a] text-[#c8b89a]"
+                      : "border-[#3a3a3a] text-[#555] hover:border-[#555]"
+                      }`}
+                    onClick={() => { setSegmentMode("manual"); setPendingSegment(null); }}
+                  >
+                    manual
+                  </button>
+                  <button
+                    className={`px-4 py-2 text-xs tracking-wider rounded-sm border cursor-pointer transition-colors ${segmentMode === "llm"
+                      ? "border-[#c8b89a] text-[#c8b89a]"
+                      : "border-[#3a3a3a] text-[#555] hover:border-[#555]"
+                      }`}
+                    onClick={() => { setSegmentMode("llm"); setPendingSegment(null); loadLlmSegments(); }}
+                  >
+                    llm-based
+                  </button>
+                </div>
+
+                <p className="text-xs tracking-wide text-[#999]">
+                  {segmentMode === "manual"
+                    ? "select text to create segments, then click one to explore"
+                    : "click a highlighted segment to explore it"}
+                </p>
 
                 {/* Journal text with highlighted segments */}
-                <div className="max-h-80 overflow-y-auto border border-[#2a2a2a] rounded p-4 text-sm leading-relaxed text-[#999]">
+                <div
+                  ref={journalRef}
+                  className="relative max-h-80 overflow-y-auto border border-[#2a2a2a] rounded p-4 text-sm leading-relaxed text-[#999] select-text"
+                  onMouseUp={segmentMode === "manual" ? handleMouseUp : undefined}
+                >
                   {(() => {
                     const colors = ["#c8b89a", "#9ab8c8", "#b89ac8", "#9ac8a3", "#c89a9a", "#c8c09a"];
+                    // Merge confirmed segments + pending selection into one sorted list for rendering
+                    const allRanges: { startIndex: number; endIndex: number; originalIndex: number; isPending: boolean; name: string; summary: string }[] =
+                      segments.map((s, i) => ({ ...s, originalIndex: i, isPending: false }));
+                    if (pendingSegment) {
+                      allRanges.push({
+                        startIndex: pendingSegment.startIndex,
+                        endIndex: pendingSegment.endIndex,
+                        originalIndex: -1,
+                        isPending: true,
+                        name: "",
+                        summary: "",
+                      });
+                    }
+                    allRanges.sort((a, b) => a.startIndex - b.startIndex);
+
                     const parts: JSX.Element[] = [];
                     let lastEnd = 0;
-                    const sorted = [...segments]
-                      .map((s, i) => ({ ...s, originalIndex: i }))
-                      .sort((a, b) => a.startIndex - b.startIndex);
-                    sorted.forEach((seg) => {
+                    allRanges.forEach((seg) => {
                       if (seg.startIndex > lastEnd) {
                         parts.push(<span key={`gap-${lastEnd}`}>{journalText.slice(lastEnd, seg.startIndex)}</span>);
                       }
-                      const color = colors[seg.originalIndex % colors.length];
-                      parts.push(
-                        <span
-                          key={`seg-${seg.originalIndex}`}
-                          className="cursor-pointer rounded px-0.5 transition-opacity hover:opacity-80"
-                          style={{ backgroundColor: color + "22", borderBottom: `2px solid ${color}` }}
-                          title={`${seg.name}: ${seg.summary}`}
-                          onClick={() => selectSegmentAndDive(seg.originalIndex)}
-                        >
-                          {journalText.slice(seg.startIndex, seg.endIndex)}
-                        </span>
-                      );
+                      if (seg.isPending) {
+                        parts.push(
+                          <span
+                            key="pending"
+                            className="rounded px-0.5"
+                            style={{ backgroundColor: "#c8b89a33", borderBottom: "2px dashed #c8b89a" }}
+                          >
+                            {journalText.slice(seg.startIndex, seg.endIndex)}
+                          </span>
+                        );
+                      } else {
+                        const color = colors[seg.originalIndex % colors.length];
+                        parts.push(
+                          <span
+                            key={`seg-${seg.originalIndex}`}
+                            className="cursor-pointer rounded px-0.5 transition-opacity hover:opacity-80"
+                            style={{ backgroundColor: color + "22", borderBottom: `2px solid ${color}` }}
+                            title={`${seg.name}: ${seg.summary}`}
+                            onClick={() => selectSegmentAndDive(seg.originalIndex)}
+                          >
+                            {journalText.slice(seg.startIndex, seg.endIndex)}
+                          </span>
+                        );
+                      }
                       lastEnd = seg.endIndex;
                     });
                     if (lastEnd < journalText.length) {
@@ -318,30 +475,74 @@ export default function Home(): JSX.Element {
                     }
                     return parts;
                   })()}
+
+                  {/* Naming popup */}
+                  {pendingSegment && (
+                    <div
+                      className="absolute z-10 bg-[#1e1e1e] border border-[#3a3a3a] rounded p-3 flex flex-col gap-2 shadow-lg"
+                      style={{ left: Math.max(0, pendingSegment.x - 100), top: pendingSegment.y, width: 200 }}
+                      onMouseDown={(e) => e.stopPropagation()}
+                    >
+                      <p className="text-xs text-[#999]">name this segment</p>
+                      <input
+                        className="w-full bg-[#0e0e0e] border border-[#2e2e2e] rounded-sm text-[#e8e0d4] px-2 py-1 text-xs font-serif outline-none focus:border-[#444] transition-colors"
+                        placeholder="segment name..."
+                        value={segmentName}
+                        onChange={(e) => setSegmentName(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter") confirmSegment(); if (e.key === "Escape") cancelSegment(); }}
+                        autoFocus
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          className="flex-1 bg-transparent border border-[#3a3a3a] rounded-sm text-[#c8b89a] px-2 py-1 text-xs cursor-pointer hover:border-[#c8b89a] transition-colors disabled:opacity-40"
+                          onClick={confirmSegment}
+                          disabled={!segmentName.trim()}
+                        >
+                          create
+                        </button>
+                        <button
+                          className="flex-1 bg-transparent border border-[#555] rounded-sm text-[#999] px-2 py-1 text-xs cursor-pointer hover:border-[#777] transition-colors"
+                          onClick={cancelSegment}
+                        >
+                          cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Segment legend */}
-                <div className="flex flex-wrap gap-2">
-                  {segments.map((seg, idx) => {
-                    const colors = ["#c8b89a", "#9ab8c8", "#b89ac8", "#9ac8a3", "#c89a9a", "#c8c09a"];
-                    const color = colors[idx % colors.length];
-                    return (
-                      <button
-                        key={idx}
-                        className="text-xs px-2 py-1 rounded border cursor-pointer transition-colors hover:opacity-80"
-                        style={{ borderColor: color, color: color }}
-                        onClick={() => selectSegmentAndDive(idx)}
-                      >
-                        {seg.name}
-                      </button>
-                    );
-                  })}
-                </div>
+                {segments.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {segments.map((seg, idx) => {
+                      const colors = ["#c8b89a", "#9ab8c8", "#b89ac8", "#9ac8a3", "#c89a9a", "#c8c09a"];
+                      const color = colors[idx % colors.length];
+                      return (
+                        <div key={idx} className="flex items-center gap-1">
+                          <button
+                            className="text-xs px-2 py-1 rounded border cursor-pointer transition-colors hover:opacity-80"
+                            style={{ borderColor: color, color: color }}
+                            onClick={() => selectSegmentAndDive(idx)}
+                          >
+                            {seg.name}
+                          </button>
+                          <button
+                            className="text-xs text-[#555] hover:text-[#a05050] cursor-pointer transition-colors"
+                            onClick={() => removeSegment(idx)}
+                            title="remove segment"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
 
                 <div className="flex gap-3 flex-wrap">
                   <button
                     className="bg-transparent border border-[#3a3a3a] rounded-sm text-[#c8b89a] px-4 py-2 text-xs tracking-wider cursor-pointer hover:border-[#c8b89a] transition-colors"
-                    onClick={() => { setStep(1); generate({ step: 1, mode: "deep_dive" }); }}
+                    onClick={() => { setMode("deep_dive"); setStep(1); generate({ step: 1, mode: "deep_dive" }); }}
                   >
                     skip — explore all
                   </button>
@@ -359,9 +560,12 @@ export default function Home(): JSX.Element {
             {stage === "question" && (
               <div className="flex flex-col gap-5">
                 {mode === "deep_dive" && (
-                  <div className="flex gap-1.5 items-center">
+                  <div className="flex justify-between w-full">
                     {STEPS.map((st) => (
-                      <div key={st.n} title={st.label} className={`w-1.5 h-1.5 rounded-full transition-colors duration-300 ${st.n === step ? "bg-[#c8b89a]" : st.n < step ? "bg-[#4a4a4a]" : "bg-[#2e2e2e]"}`} />
+                      <div key={st.n} className="flex flex-col items-center gap-1">
+                        <div className={`w-2 h-2 rounded-full transition-colors duration-300 ${st.n === step ? "bg-[#c8b89a]" : st.n < step ? "bg-[#555]" : "bg-[#2e2e2e]"}`} />
+                        <span className={`text-[10px] tracking-wide transition-colors duration-300 ${st.n === step ? "text-[#c8b89a]" : st.n < step ? "text-[#555]" : "text-[#2e2e2e]"}`}>{st.label.toLowerCase()}</span>
+                      </div>
                     ))}
                   </div>
                 )}
@@ -384,9 +588,12 @@ export default function Home(): JSX.Element {
             {/* Deep Dive Options (after answering) */}
             {stage === "deep-dive-options" && (
               <div className="flex flex-col gap-5">
-                <div className="flex gap-1.5 items-center">
+                <div className="flex justify-between w-full">
                   {STEPS.map((st) => (
-                    <div key={st.n} title={st.label} className={`w-1.5 h-1.5 rounded-full transition-colors duration-300 ${st.n === step ? "bg-[#c8b89a]" : st.n < step ? "bg-[#4a4a4a]" : "bg-[#2e2e2e]"}`} />
+                    <div key={st.n} className="flex flex-col items-center gap-1">
+                      <div className={`w-2 h-2 rounded-full transition-colors duration-300 ${st.n === step ? "bg-[#c8b89a]" : st.n < step ? "bg-[#555]" : "bg-[#2e2e2e]"}`} />
+                      <span className={`text-[10px] tracking-wide transition-colors duration-300 ${st.n === step ? "text-[#c8b89a]" : st.n < step ? "text-[#555]" : "text-[#2e2e2e]"}`}>{st.label.toLowerCase()}</span>
+                    </div>
                   ))}
                 </div>
                 <p className="text-xs tracking-wide text-[#999]">what would you like to do next?</p>

@@ -45,7 +45,7 @@ class Segment(BaseModel):
 class GenerateRequest(BaseModel):
     mode: Mode  # "clarifying" or "deep_dive"
     step: Step_N | None = None
-    topic: str | None = None  # optional focus topic for deep dive
+    topic: str | None = None  # optional focus topic for deep dive (segment)
     history: list[dict] | None = None  # Q&A history with timestamps
     segment: str | None = None  # focused segment text
     segment_indexes: list[int] | None = None  # [startIndex, endIndex] of the segment
@@ -61,6 +61,17 @@ async def upload_journal(file: UploadFile = File(...)):
 class SegmentResponse(BaseModel):
     segments: list[Segment]
     journal_text: str
+
+@app.get("/journal-text")
+async def get_journal_text():
+    try:
+        with open(JOURNAL_PATH) as f:
+            journal_text = f.read()
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="No journal uploaded yet.")
+    if not journal_text:
+        raise HTTPException(status_code=404, detail="Journal is empty.")
+    return {"journal_text": journal_text}
 
 @app.post("/segment")
 async def segment_journal() -> SegmentResponse:
