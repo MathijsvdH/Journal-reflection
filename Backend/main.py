@@ -15,7 +15,7 @@ app = FastAPI(title="Journal Reflection API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Next.js dev server
+    allow_origins=["http://localhost:3000"], #frontend server
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -28,7 +28,7 @@ JOURNAL_PATH = "uploaded_journal.txt"
 
 class Mode(str, Enum):
     clarifying = "clarifying"
-    deep_dive = "deep_dive"
+    deep_dive = "deep_dive" 
 
 class Step_N(int, Enum):
     description = 1
@@ -167,7 +167,7 @@ async def generate_question(req: GenerateRequest):
                 token = chunk.get("message", {}).get("content", "")
                 if token:
                     yield f"data: {json.dumps({'token': token})}\n\n"
-            yield "data: [DONE]\n\n"
+                    yield "data: [DONE]\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'token': f'Error: {str(e)}'})}\n\n"
             yield "data: [DONE]\n\n"

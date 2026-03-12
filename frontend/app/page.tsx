@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef, useCallback, ChangeEvent, JSX, } from "react";
+import { customScrollbar } from '../lib/scrollbar';
 
 const API = "http://localhost:8000";
 
@@ -418,7 +419,7 @@ export default function Home(): JSX.Element {
                 {/* Journal text with highlighted segments */}
                 <div
                   ref={journalRef}
-                  className="relative max-h-80 overflow-y-auto border border-[#2a2a2a] rounded p-4 text-sm leading-relaxed text-[#999] select-text"
+                  className={`${customScrollbar}relative max-h-80 overflow-y-auto border border-[#2a2a2a] rounded p-4 text-sm leading-relaxed text-[#999] select-text whitespace-pre-wrap`}
                   onMouseUp={segmentMode === "manual" ? handleMouseUp : undefined}
                 >
                   {(() => {
