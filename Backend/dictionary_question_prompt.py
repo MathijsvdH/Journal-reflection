@@ -1,4 +1,4 @@
-def build_messages(journal_text: str, mode: str, topic: str | None, step: int | None, history: list[dict] | None = None, segment_text: str | None = None, segment_indexes: list[int] | None = None) -> list[dict]:
+def build_messages(journal_text: str, mode: str, topic: str | None, topic_summary: str | None, step: int | None, history: list[dict] | None = None) -> list[dict]:
     # Build the system message based on mode
     if mode == "clarifying":
         system_content = """You are a reflective question-asker. Your ONLY job is to ask ONE short clarifying question about the user's journal entry.
@@ -67,14 +67,10 @@ Your entire response must be exactly one question, no other text."""
 {journal_text}
 \"\"\""""
 
-    if segment_text and segment_indexes:
-        start, end = segment_indexes
-        user_context += f"""
-
-Focused Segment (from indices {start}-{end}):
-\"\"\"
-{segment_text}
-\"\"\""""
+    if topic:
+        user_context += f'\n\nFocused Topic: "{topic}"'
+        if topic_summary:
+            user_context += f"\nTopic summary: {topic_summary}"
 
     messages.append({'role': 'user', 'content': user_context})
 

@@ -9,7 +9,7 @@ import ollama
 
 import question_prompt
 import dictionary_question_prompt
-import segment_prompt
+import topic_prompt
 
 app = FastAPI(title="Journal Reflection API")
 
@@ -38,19 +38,17 @@ class Step_N(int, Enum):
     conclusion = 5
     action = 6
 
-class Segment(BaseModel):
+class Topic(BaseModel):
     name: str
     summary: str
-    startIndex: int
-    endIndex: int
+    quotes: list[str]
 
 class GenerateRequest(BaseModel):
     mode: Mode  # "clarifying" or "deep_dive"
     step: Step_N | None = None
-    topic: str | None = None  # optional focus topic for deep dive (segment)
+    topic: str | None = None  # topic name for deep dive focus
+    topic_summary: str | None = None  # topic summary for context
     history: list[dict] | None = None  # Q&A history with timestamps
-    segment: str | None = None  # focused segment text
-    segment_indexes: list[int] | None = None  # [startIndex, endIndex] of the segment
     
 @app.post("/upload")
 async def upload_journal(file: UploadFile = File(...)):
@@ -60,8 +58,8 @@ async def upload_journal(file: UploadFile = File(...)):
         f.write(text)
     return {"word_count": len(text.split()), "filename": file.filename}
 
-class SegmentResponse(BaseModel):
-    segments: list[Segment]
+class TopicResponse(BaseModel):
+    topics: list[Topic]
     journal_text: str
 
 @app.get("/journal-text")
@@ -75,8 +73,8 @@ async def get_journal_text():
         raise HTTPException(status_code=404, detail="Journal is empty.")
     return {"journal_text": journal_text}
 
-@app.post("/segment")
-async def segment_journal() -> SegmentResponse:
+@app.post("/topics")
+async def extract_topics() -> TopicResponse:
     try:
         with open(JOURNAL_PATH) as f:
             journal_text = f.read()
@@ -86,7 +84,7 @@ async def segment_journal() -> SegmentResponse:
     if not journal_text:
         raise HTTPException(status_code=404, detail="Journal is empty.")
 
-    prompt = segment_prompt.build_prompt(journal_text)
+    prompt = topic_prompt.build_prompt(journal_text)
 
     try:
         async with httpx.AsyncClient(timeout = httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0)) as client:
@@ -100,37 +98,33 @@ async def segment_journal() -> SegmentResponse:
             result = response.json()
             response_text = result.get("response", "").strip()
 
-            # Parse JSON response
             try:
-                # Try to extract JSON from the response (in case there's extra text)
                 json_start = response_text.find('[')
                 json_end = response_text.rfind(']') + 1
                 if json_start == -1 or json_end <= json_start:
                     raise ValueError("No JSON array found in response")
 
                 json_str = response_text[json_start:json_end]
-                raw_segments = json.loads(json_str)
+                raw_topics = json.loads(json_str)
 
-                # Convert to Segment objects with correct field names
-                segments: list[Segment] = []
-                for seg in raw_segments:
-                    segments.append(Segment(
-                        name=seg.get("name", ""),
-                        summary=seg.get("summary", ""),
-                        startIndex=seg.get("startIndex", 0),
-                        endIndex=seg.get("endIndex", 0)
+                topics: list[Topic] = []
+                for t in raw_topics:
+                    topics.append(Topic(
+                        name=t.get("name", ""),
+                        summary=t.get("summary", ""),
+                        quotes=t.get("quotes", []),
                     ))
 
-                return SegmentResponse(segments=segments, journal_text=journal_text)
+                return TopicResponse(topics=topics, journal_text=journal_text)
             except (json.JSONDecodeError, ValueError, KeyError) as e:
                 print(f"Parse error: {str(e)}")
                 print(f"Response text: {response_text}")
-                raise HTTPException(status_code=500, detail=f"Failed to parse segments: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"Failed to parse topics: {str(e)}")
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Segment error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Segmentation failed: {str(e)}")
+        print(f"Topic extraction error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Topic extraction failed: {str(e)}")
 
 @app.post("/generate-question")
 async def generate_question(req: GenerateRequest):
@@ -148,10 +142,9 @@ async def generate_question(req: GenerateRequest):
             journal_text,
             mode=req.mode,
             topic=req.topic,
+            topic_summary=req.topic_summary,
             step=req.step,
             history=req.history,
-            segment_text=req.segment,
-            segment_indexes=req.segment_indexes
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

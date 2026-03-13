@@ -1,4 +1,4 @@
-def build_prompt(journal_text: str, mode: str, topic: str | None, step: int | None, history: list[dict] | None = None, segment_text: str | None = None, segment_indexes: list[int] | None = None) -> str:
+def build_prompt(journal_text: str, mode: str, topic: str | None, step: int | None, history: list[dict] | None = None, topic_summary: str | None = None) -> str:
     base = f"""You are a thoughtful journaling coach. A user has shared their journal entry with you.
 
 Journal Entry:
@@ -7,13 +7,12 @@ Journal Entry:
 \"\"\"
 """
 
-    if segment_text and segment_indexes:
-        start, end = segment_indexes
+    if topic:
         base += f"""
-Focused Segment (from indices {start}-{end}):
-\"\"\"
-{segment_text}
-\"\"\"
+Focused Topic: "{topic}"
+"""
+        if topic_summary:
+            base += f"""Topic summary: {topic_summary}
 """
 
     if history:
