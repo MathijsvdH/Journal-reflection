@@ -5,7 +5,7 @@ import { customScrollbar } from '../lib/scrollbar';
 
 const API = "http://localhost:8000";
 
-type Stage = "upload" | "choose" | "topic-select" | "question" | "deep-dive-options";
+type Stage = "upload" | "choose" | "deep-dive-setup" | "topic-select" | "question" | "deep-dive-options";
 type Mode = "clarifying" | "deep_dive" | null;
 
 interface Step {
@@ -33,6 +33,11 @@ interface GenerateOptions {
   history?: QAEntry[];
 }
 
+interface DeepDiveTopicContext {
+  name: string;
+  summary?: string;
+}
+
 const STEPS: Step[] = [
   { n: 1, label: "Description" },
   { n: 2, label: "Feelings" },
@@ -55,6 +60,8 @@ export default function Home(): JSX.Element {
   const [journalText, setJournalText] = useState<string>("");
   const [selectedTopic, setSelectedTopic] = useState<number | null>(null);
   const [hoveredTopic, setHoveredTopic] = useState<number | null>(null);
+  const [manualTopic, setManualTopic] = useState<string>("");
+  const [activeDeepDiveTopic, setActiveDeepDiveTopic] = useState<DeepDiveTopicContext | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>("");
   const fileRef = useRef<HTMLInputElement>(null);
@@ -170,14 +177,26 @@ export default function Home(): JSX.Element {
 
   function deepDiveAskAnother(): void {
     const topic = selectedTopic !== null ? topics[selectedTopic] : undefined;
-    generate({ step, mode: "deep_dive", topicName: topic?.name, topicSummary: topic?.summary, history });
+    generate({
+      step,
+      mode: "deep_dive",
+      topicName: topic?.name ?? activeDeepDiveTopic?.name,
+      topicSummary: topic?.summary ?? activeDeepDiveTopic?.summary,
+      history,
+    });
   }
 
   function deepDiveNextStep(): void {
     const next = step + 1;
     setStep(next);
     const topic = selectedTopic !== null ? topics[selectedTopic] : undefined;
-    generate({ step: next, mode: "deep_dive", topicName: topic?.name, topicSummary: topic?.summary, history });
+    generate({
+      step: next,
+      mode: "deep_dive",
+      topicName: topic?.name ?? activeDeepDiveTopic?.name,
+      topicSummary: topic?.summary ?? activeDeepDiveTopic?.summary,
+      history,
+    });
   }
 
   function startClarifyingDetour(): void {
@@ -193,16 +212,19 @@ export default function Home(): JSX.Element {
     setQuestion("");
     setAnswer("");
     setDeepDiveStep(null);
+    setManualTopic("");
+    setActiveDeepDiveTopic(null);
     setError("");
   }
 
-  async function startDeepDive(): Promise<void> {
+  async function startDeepDiveWithTopics(): Promise<void> {
     setLoading(true);
     setError("");
     setMode("deep_dive");
     setTopics([]);
     setSelectedTopic(null);
     setHoveredTopic(null);
+    setActiveDeepDiveTopic(null);
     try {
       const res = await fetch(`${API}/topics`, { method: "POST" });
       if (!res.ok) {
@@ -221,10 +243,42 @@ export default function Home(): JSX.Element {
     }
   }
 
+  function openDeepDiveSetup(): void {
+    setError("");
+    setStage("deep-dive-setup");
+  }
+
+  function startDeepDiveWithoutTopics(): void {
+    setMode("deep_dive");
+    setTopics([]);
+    setSelectedTopic(null);
+    setHoveredTopic(null);
+    setActiveDeepDiveTopic(null);
+    setStep(1);
+    generate({ step: 1, mode: "deep_dive" });
+  }
+
+  function startDeepDiveWithManualTopic(): void {
+    const topic = manualTopic.trim();
+    if (!topic) {
+      setError("Please enter a topic before starting.");
+      return;
+    }
+    setError("");
+    setMode("deep_dive");
+    setTopics([]);
+    setSelectedTopic(null);
+    setHoveredTopic(null);
+    setActiveDeepDiveTopic({ name: topic });
+    setStep(1);
+    generate({ step: 1, mode: "deep_dive", topicName: topic });
+  }
+
   function selectTopicAndDive(topicIndex: number): void {
     setSelectedTopic(topicIndex);
     setMode("deep_dive");
     const topic = topics[topicIndex];
+    setActiveDeepDiveTopic({ name: topic.name, summary: topic.summary });
     setStep(1);
     generate({ step: 1, mode: "deep_dive", topicName: topic.name, topicSummary: topic.summary });
   }
@@ -327,7 +381,50 @@ export default function Home(): JSX.Element {
                   <button className="bg-transparent border border-[#3a3a3a] rounded-sm text-[#c8b89a] px-4 py-2 text-xs tracking-wider cursor-pointer hover:border-[#c8b89a] transition-colors disabled:opacity-40"
                     onClick={() => handleModeSelect("clarifying")}>broad questions</button>
                   <button className="bg-transparent border border-[#3a3a3a] rounded-sm text-[#c8b89a] px-4 py-2 text-xs tracking-wider cursor-pointer hover:border-[#c8b89a] transition-colors disabled:opacity-40"
-                    onClick={startDeepDive}>deep dive</button>
+                    onClick={openDeepDiveSetup}>deep dive</button>
+                </div>
+              </div>
+            )}
+
+            {/* Deep Dive setup */}
+            {stage === "deep-dive-setup" && (
+              <div className="flex flex-col gap-5">
+                <p className="text-xs text-[#555]">↳ {filename}</p>
+                <p className="text-xs tracking-wide text-[#999]">do you want topic suggestions before deep diving?</p>
+                <div className="flex flex-col gap-3">
+                  <button
+                    className="bg-transparent border border-[#3a3a3a] rounded-sm text-[#c8b89a] px-4 py-2 text-xs tracking-wider cursor-pointer hover:border-[#c8b89a] transition-colors"
+                    onClick={startDeepDiveWithTopics}
+                  >
+                    yes, suggest topics first
+                  </button>
+                  <button
+                    className="bg-transparent border border-[#3a3a3a] rounded-sm text-[#c8b89a] px-4 py-2 text-xs tracking-wider cursor-pointer hover:border-[#c8b89a] transition-colors"
+                    onClick={startDeepDiveWithoutTopics}
+                  >
+                    no, go straight to deep dive
+                  </button>
+                  <div className="flex flex-col gap-2 border border-[#2a2a2a] rounded p-3">
+                    <p className="text-xs tracking-wide text-[#999]">or enter your own topic</p>
+                    <input
+                      className="w-full bg-[#0e0e0e] border border-[#2e2e2e] rounded-sm text-[#e8e0d4] px-3 py-2 text-sm font-serif outline-none focus:border-[#444] transition-colors"
+                      placeholder="e.g. teamwork under pressure"
+                      value={manualTopic}
+                      onChange={(e) => setManualTopic(e.target.value)}
+                    />
+                    <button
+                      className="bg-transparent border border-[#3a3a3a] rounded-sm text-[#c8b89a] px-4 py-2 text-xs tracking-wider cursor-pointer hover:border-[#c8b89a] transition-colors"
+                      onClick={startDeepDiveWithManualTopic}
+                    >
+                      start with my topic
+                    </button>
+                  </div>
+                  <button
+                    className="bg-transparent border border-[#555] rounded-sm text-[#999] px-4 py-2 text-xs tracking-wider cursor-pointer hover:border-[#777] hover:text-[#ccc] transition-colors"
+                    onClick={goBackToModes}
+                  >
+                    back to modes
+                  </button>
                 </div>
               </div>
             )}
